@@ -21,19 +21,26 @@ const calculateHashrate = (hashes) => {
     return hashrate;
 };
 
+// ✅ SỬA LỖI: Đường dẫn đúng đến pools.json
 const getPool = async () => {
     return new Promise((resolve, reject) => {
+        // pools.json nằm trong cùng thư mục với file này (miner/src/../)
+        // Nên dùng __dirname để chỉ đến thư mục hiện tại, sau đó lên 1 cấp
         const poolPath = path.join(__dirname, "../pools.json");
+        
+        console.log(`[DEBUG] Looking for pools.json at: ${poolPath}`);
+        
         if (fs.existsSync(poolPath)) {
             try {
                 const raw = fs.readFileSync(poolPath, "utf-8");
                 const data = JSON.parse(raw);
+                console.log(`[DEBUG] Loaded pool: ${data.name} (${data.ip}:${data.port})`);
                 resolve(data);
             } catch (err) {
-                reject("❌ Lỗi đọc pools.json: " + err);
+                reject("❌ Lỗi đọc pools.json: " + err.message);
             }
         } else {
-            reject("⚠️ pools.json không tồn tại. Vui lòng tạo file này.");
+            reject(`⚠️ pools.json không tồn tại tại: ${poolPath}`);
         }
     });
 };
