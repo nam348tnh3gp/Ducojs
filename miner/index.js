@@ -81,7 +81,6 @@ const findNumber = async (prev, toFind, diff, data, socket, startTime) => {
         if (hash == toFind) {
             const elapsed = (Date.now() - startTime) / 1000;
             const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
-            // Format đúng theo protocol Duino-Coin: nonce,hashrate,miner_name,rig_id,thread_id
             socket.write(`${i},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}`);
             return true;
         }
@@ -89,18 +88,29 @@ const findNumber = async (prev, toFind, diff, data, socket, startTime) => {
     return false;
 };
 
-const startMining = async (socket, data) => {
+const startMining = async (socket, data, reconnectCallback) => {
     let promiseSocket = new PromiseSocket(socket);
-    promiseSocket.setTimeout(10000);
+    promiseSocket.setTimeout(15000);
     let startTime = Date.now();
+    let isRunning = true;
 
-    while (true) {
+    while (isRunning) {
         try {
             // Gửi JOB request với difficulty từ config
             socket.write("JOB," + user + "," + difficulty + "," + mining_key);
-            let job = await promiseSocket.read();
-            job = job.split(",");
-
+            
+            // Đợi job với timeout
+            const jobData = await Promise.race([
+                promiseSocket.read(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Job timeout")), 10000))
+            ]);
+            
+            if (!jobData) {
+                console.log(`[${data.workerId}] No job received, reconnecting...`);
+                break;
+            }
+            
+            let job = jobData.split(",");
             if (job.length < 3) {
                 console.log(`[${data.workerId}] Invalid job received: ${job}`);
                 continue;
@@ -118,9 +128,16 @@ const startMining = async (socket, data) => {
                 continue;
             }
 
-            // Đợi phản hồi từ pool
-            const response = await promiseSocket.read();
-            if (!response) continue;
+            // Đợi phản hồi từ pool với timeout
+            const response = await Promise.race([
+                promiseSocket.read(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Response timeout")), 5000))
+            ]);
+            
+            if (!response) {
+                console.log(`[${data.workerId}] No response from pool`);
+                break;
+            }
 
             if (response.includes("GOOD")) {
                 data.accepted = data.accepted + 1;
@@ -140,10 +157,105 @@ const startMining = async (socket, data) => {
             data.hashes = 0;
             
         } catch (err) {
-            console.log(`[${data.workerId}] Error while mining: ` + err.message);
+            console.log(`[${data.workerId}] ⚠️ Mining error: ${err.message}`);
             break;
         }
     }
+    
+    // Đóng socket và gọi reconnect
+    try {
+        socket.end();
+    } catch(e) {}
+    
+    if (reconnectCallback) {
+        setTimeout(() => reconnectCallback(), 3000);
+    }
+};
+
+// ==================== WORKER CONNECTION HANDLER ====================
+const startWorker = () => {
+    let workerData = {
+        workerId: cluster.worker.id - 1,
+        hashes: 0,
+        rejected: 0,
+        accepted: 0
+    };
+    
+    let currentSocket = null;
+    let reconnectTimer = null;
+    let isConnecting = false;
+    
+    const connectToPool = () => {
+        if (isConnecting) return;
+        isConnecting = true;
+        
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        
+        utils.getPool().then((poolData) => {
+            console.log(`[${workerData.workerId}] 🌐 Connecting to pool: ${poolData.name} (${poolData.ip}:${poolData.port})`);
+            
+            const socket = new net.Socket();
+            currentSocket = socket;
+            socket.setEncoding("utf8");
+            socket.setTimeout(30000);
+            
+            socket.once("connect", () => {
+                console.log(`[${workerData.workerId}] ✅ Connected to pool`);
+            });
+            
+            socket.once("data", (data) => {
+                console.log(`[${workerData.workerId}] 📡 Pool MOTD: ${data.trim()}`);
+                startMining(socket, workerData, () => {
+                    // Reconnect callback
+                    if (!isConnecting) {
+                        console.log(`[${workerData.workerId}] 🔄 Reconnecting...`);
+                        connectToPool();
+                    }
+                });
+                isConnecting = false;
+            });
+            
+            socket.on("end", () => {
+                console.log(`[${workerData.workerId}] 🔌 Connection ended by pool`);
+                if (!isConnecting) {
+                    reconnectTimer = setTimeout(() => connectToPool(), 5000);
+                }
+                isConnecting = false;
+            });
+            
+            socket.on("error", (err) => {
+                console.log(`[${workerData.workerId}] ⚠️ Socket error: ${err.message}`);
+                if (!isConnecting) {
+                    reconnectTimer = setTimeout(() => connectToPool(), 5000);
+                }
+                isConnecting = false;
+            });
+            
+            socket.connect(poolData.port, poolData.ip);
+            
+        }).catch((err) => {
+            console.log(`[${workerData.workerId}] ❌ Failed to get pool: ${err}`);
+            reconnectTimer = setTimeout(() => {
+                isConnecting = false;
+                connectToPool();
+            }, 10000);
+        });
+    };
+    
+    // Load config trước khi kết nối
+    loadConfig().then((cfg) => {
+        user = cfg.username;
+        processes = parseInt(cfg.threads) || 1;
+        hashlib = cfg.hashlib || "js-sha1";
+        mining_key = cfg.mining_key || "";
+        difficulty = cfg.difficulty || "LOW";
+        
+        console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}`);
+        connectToPool();
+    }).catch((err) => {
+        console.log(`[${workerData.workerId}] ❌ Failed to load config: ${err}`);
+        setTimeout(() => startWorker(), 5000);
+    });
 };
 
 // ==================== MAIN ====================
@@ -189,53 +301,33 @@ if (cluster.isMaster) {
                 }
                 printData(threads);
             });
+            
+            worker.on("exit", (code) => {
+                console.log(`⚠️ Worker ${i} exited with code ${code}, restarting...`);
+                setTimeout(() => {
+                    let newWorker = cluster.fork();
+                    console.log(`✅ Worker ${i} (pid-${newWorker.process.pid}) restarted`);
+                    let newData = {
+                        workerId: i,
+                        hashes: 0,
+                        rejected: 0,
+                        accepted: 0
+                    };
+                    threads[i] = newData;
+                    
+                    newWorker.on("message", (msg) => {
+                        if (threads[msg.workerId]) {
+                            threads[msg.workerId].hashes = msg.hashes;
+                            threads[msg.workerId].rejected = msg.rejected;
+                            threads[msg.workerId].accepted = msg.accepted;
+                        }
+                        printData(threads);
+                    });
+                }, 3000);
+            });
         }
     });
 } else {
     // Worker process
-    let workerData = {
-        workerId: cluster.worker.id - 1,
-        hashes: 0,
-        rejected: 0,
-        accepted: 0
-    };
-
-    loadConfig().then((cfg) => {
-        user = cfg.username;
-        processes = parseInt(cfg.threads) || 1;
-        hashlib = cfg.hashlib || "js-sha1";
-        mining_key = cfg.mining_key || "";
-        difficulty = cfg.difficulty || "LOW";
-    });
-
-    let socket = new net.Socket();
-    socket.setEncoding("utf8");
-    socket.setTimeout(10000);
-
-    utils.getPool().then((poolData) => {
-        console.log(`[${workerData.workerId}] 🌐 Connecting to pool: ${poolData.name} (${poolData.ip}:${poolData.port})`);
-        socket.connect(poolData.port, poolData.ip);
-    }).catch((err) => {
-        console.log(`[${workerData.workerId}] ❌ Failed to get pool: ${err.message}`);
-        process.exit(1);
-    });
-
-    socket.once("data", (data) => {
-        console.log(`[${workerData.workerId}] 📡 Pool MOTD: ${data.trim()}`);
-        startMining(socket, workerData);
-    });
-
-    socket.on("end", () => {
-        console.log(`[${workerData.workerId}] 🔌 Connection ended`);
-    });
-
-    socket.on("error", (err) => {
-        console.log(`[${workerData.workerId}] ⚠️ Socket error: ${err.message}`);
-        setTimeout(() => {
-            console.log(`[${workerData.workerId}] 🔄 Reconnecting...`);
-            utils.getPool().then((poolData) => {
-                socket.connect(poolData.port, poolData.ip);
-            }).catch((e) => console.log(e));
-        }, 5000);
-    });
+    startWorker();
 }
