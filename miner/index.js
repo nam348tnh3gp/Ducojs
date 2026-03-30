@@ -7,7 +7,7 @@ const fs = require('fs');
 const ini = require('ini');
 const path = require("path");
 
-const CONFIG_FILE = path.join(__dirname, "config.ini");
+const CONFIG_FILE = path.join(__dirname, "../config.ini");
 
 let user = "",
     processes = 0,
@@ -73,33 +73,17 @@ const printData = (threads) => {
     rows = [];
 };
 
-const findNumber = async (prev, toFind, diff, data, socket, startTime) => {
-    for (let i = 0; i < 100 * diff + 1; i++) {
-        let hash = utils._sha1(hashlib, (prev + i));
-        data.hashes = data.hashes + 1;
-
-        if (hash == toFind) {
-            const elapsed = (Date.now() - startTime) / 1000;
-            const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
-            socket.write(`${i},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}`);
-            return true;
-        }
-    }
-    return false;
-};
-
+// ================= MINING LOOP (sử dụng unified mineJob) =================
 const startMining = async (socket, data, reconnectCallback) => {
     let promiseSocket = new PromiseSocket(socket);
     promiseSocket.setTimeout(15000);
-    let startTime = Date.now();
     let isRunning = true;
+    let intensity = 95; // Default intensity, can be read from config
 
     while (isRunning) {
         try {
-            // Gửi JOB request với difficulty từ config
             socket.write("JOB," + user + "," + difficulty + "," + mining_key);
             
-            // Đợi job với timeout
             const jobData = await Promise.race([
                 promiseSocket.read(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Job timeout")), 10000))
@@ -119,16 +103,27 @@ const startMining = async (socket, data, reconnectCallback) => {
             const prev = job[0];
             const toFind = job[1];
             const diff = parseInt(job[2]);
+            const startTime = Date.now();
 
-            startTime = Date.now();
-            const found = await findNumber(prev, toFind, diff, data, socket, startTime);
+            // Use unified mineJob function
+            const result = await utils.mineJob(prev, toFind, diff, intensity, hashlib, (current, max) => {
+                if (current % 50000 === 0 && current > 0) {
+                    console.log(`[${data.workerId}] 🔍 Progress: ${current}/${max} nonces (${Math.round(current/max*100)}%)`);
+                }
+            });
             
-            if (!found) {
+            data.hashes += result.hashes;
+            
+            if (result.nonce > 0) {
+                const elapsed = (Date.now() - startTime) / 1000;
+                const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
+                socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}`);
+            } else {
                 console.log(`[${data.workerId}] No nonce found for this job`);
                 continue;
             }
 
-            // Đợi phản hồi từ pool với timeout
+            // Wait for pool response
             const response = await Promise.race([
                 promiseSocket.read(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Response timeout")), 5000))
@@ -140,19 +135,18 @@ const startMining = async (socket, data, reconnectCallback) => {
             }
 
             if (response.includes("GOOD")) {
-                data.accepted = data.accepted + 1;
+                data.accepted++;
                 console.log(`[${data.workerId}] ✅ Share accepted! Total: ${data.accepted}`);
             } else if (response.includes("BLOCK")) {
                 console.log(`[${data.workerId}] ⛓️ New block found!`);
-                data.accepted = data.accepted + 1;
+                data.accepted++;
             } else if (response.includes("BAD")) {
-                data.rejected = data.rejected + 1;
+                data.rejected++;
                 console.log(`[${data.workerId}] ❌ Share rejected: ${response}`);
             } else {
                 console.log(`[${data.workerId}] ℹ️ Pool response: ${response}`);
             }
 
-            // Gửi dữ liệu về master process để cập nhật stats
             process.send(data);
             data.hashes = 0;
             
@@ -162,7 +156,6 @@ const startMining = async (socket, data, reconnectCallback) => {
         }
     }
     
-    // Đóng socket và gọi reconnect
     try {
         socket.end();
     } catch(e) {}
@@ -172,7 +165,7 @@ const startMining = async (socket, data, reconnectCallback) => {
     }
 };
 
-// ==================== WORKER CONNECTION HANDLER ====================
+// ================= WORKER CONNECTION HANDLER =================
 const startWorker = () => {
     let workerData = {
         workerId: cluster.worker.id - 1,
@@ -191,6 +184,14 @@ const startWorker = () => {
         
         if (reconnectTimer) clearTimeout(reconnectTimer);
         
+        // Hiển thị FastHash status khi worker khởi động
+        if (utils.hasFastHash) {
+            console.log(`[${workerData.workerId}] 🚀 FastHash (Rust) is ACTIVE - mining accelerated!`);
+        } else {
+            console.log(`[${workerData.workerId}] 📦 FastHash NOT available - using pure JS (slower)`);
+            console.log(`[${workerData.workerId}] 💡 To enable FastHash, run: npm run build-fast`);
+        }
+        
         utils.getPool().then((poolData) => {
             console.log(`[${workerData.workerId}] 🌐 Connecting to pool: ${poolData.name} (${poolData.ip}:${poolData.port})`);
             
@@ -206,7 +207,6 @@ const startWorker = () => {
             socket.once("data", (data) => {
                 console.log(`[${workerData.workerId}] 📡 Pool MOTD: ${data.trim()}`);
                 startMining(socket, workerData, () => {
-                    // Reconnect callback
                     if (!isConnecting) {
                         console.log(`[${workerData.workerId}] 🔄 Reconnecting...`);
                         connectToPool();
@@ -242,7 +242,6 @@ const startWorker = () => {
         });
     };
     
-    // Load config trước khi kết nối
     loadConfig().then((cfg) => {
         user = cfg.username;
         processes = parseInt(cfg.threads) || 1;
@@ -250,7 +249,7 @@ const startWorker = () => {
         mining_key = cfg.mining_key || "";
         difficulty = cfg.difficulty || "LOW";
         
-        console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}`);
+        console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}, hashlib=${hashlib}`);
         connectToPool();
     }).catch((err) => {
         console.log(`[${workerData.workerId}] ❌ Failed to load config: ${err}`);
@@ -258,7 +257,7 @@ const startWorker = () => {
     });
 };
 
-// ==================== MAIN ====================
+// ================= MASTER PROCESS =================
 if (cluster.isMaster) {
     let threads = [];
 
@@ -274,12 +273,14 @@ if (cluster.isMaster) {
             process.exit(1);
         }
 
-        console.log("🚀 Miner Started");
+        console.log("\n🚀 ========== DUCO MINER STARTING ==========");
         console.log(`   👤 Username: ${user}`);
         console.log(`   🔑 Mining Key: ${mining_key.substring(0, 3)}***`);
         console.log(`   🧵 Threads: ${processes}`);
         console.log(`   📊 Difficulty: ${difficulty}`);
-        console.log(`   📦 Hashlib: ${hashlib}\n`);
+        console.log(`   📦 Hashlib: ${hashlib}`);
+        console.log(`   🚀 FastHash: ${utils.hasFastHash ? '✅ ACTIVE (accelerated)' : '❌ NOT ACTIVE (using JS)'}`);
+        console.log("===========================================\n");
 
         for (let i = 0; i < processes; i++) {
             let worker = cluster.fork();
