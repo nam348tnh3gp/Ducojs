@@ -16,7 +16,7 @@ app.get("/", (req, res) => {
 });
 
 const minerPath = path.join(__dirname, "miner", "index.js");
-const testPath = path.join(__dirname, "testLib.js");
+const testPath = path.join(__dirname, "miner", "testLib.js"); // Sửa ở đây
 let logBuffer = "";
 let currentMiner = null;
 
