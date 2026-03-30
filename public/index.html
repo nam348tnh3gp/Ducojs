@@ -12,20 +12,40 @@
   <h2>🛠️ DUCO Miner Log</h2>
   <div class="controls">
     <button onclick="clearLog()">🧹 Xóa Log</button>
+    <button id="stopBtn" onclick="stopMiner()">⏹️ Dừng Miner</button>
+    <button id="restartBtn" onclick="restartMiner()">🔄 Khởi động lại</button>
   </div>
   <pre id="log">[Bắt đầu đào...]</pre>
 
   <script>
     const log = document.getElementById("log");
     const socket = io();
+    let minerRunning = true;
 
     socket.on("miner-log", (msg) => {
       log.textContent += msg;
       log.scrollTop = log.scrollHeight;
     });
+    
+    socket.on("miner-status", (status) => {
+      minerRunning = status.running;
+      const stopBtn = document.getElementById("stopBtn");
+      const restartBtn = document.getElementById("restartBtn");
+      if (stopBtn) stopBtn.disabled = !minerRunning;
+    });
 
     function clearLog() {
       log.textContent = "";
+    }
+    
+    function stopMiner() {
+      fetch('/stop', { method: 'POST' })
+        .then(() => log.textContent += "\n⏹️ Đã gửi lệnh dừng miner...\n");
+    }
+    
+    function restartMiner() {
+      fetch('/restart', { method: 'POST' })
+        .then(() => log.textContent += "\n🔄 Đã gửi lệnh khởi động lại...\n");
     }
   </script>
 </body>
