@@ -1,0 +1,14 @@
+[package]
+name = "libducohasher"
+version = "0.1.1"
+edition = "2021"
+
+[lib]
+name = "ducohasher"
+crate-type = ["cdylib"]
+
+[dependencies]
+itoa = "1.0.11"
+sha1_smol = "1.0.1"
+# Thay pyo3 bằng neon cho Node.js
+neon = "0.10"
