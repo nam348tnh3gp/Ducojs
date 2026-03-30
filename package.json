@@ -1,10 +1,12 @@
 {
   "name": "duino-coin-nodejs-miner",
-  "version": "1.0.0",
-  "description": "Duino-Coin NodeJS miner + Web UI",
+  "version": "2.0.0",
+  "description": "Duino-Coin NodeJS miner with optional Rust FastHash acceleration",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "build-fast": "cd libducohasher && npm install 2>/dev/null || echo '⚠️ FastHash build skipped'",
+    "test": "node testLib.js"
   },
   "dependencies": {
     "benchmark": "^2.1.4",
@@ -18,6 +20,9 @@
     "express": "^4.18.2",
     "socket.io": "^4.7.2",
     "strip-ansi": "^7.1.0"
+  },
+  "optionalDependencies": {
+    "neon-cli": "^0.10.0"
   },
   "author": "Anonynous_N",
   "license": "MIT"
