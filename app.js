@@ -16,8 +16,9 @@ app.get("/", (req, res) => {
 });
 
 const minerPath = path.join(__dirname, "miner", "index.js");
-const testPath = path.join(__dirname, "miner", "testLib.js");
+const testPath = path.join(__dirname, "testLib.js");
 let logBuffer = "";
+let currentMiner = null;
 
 function broadcastLog(msg) {
   const clean = stripAnsi(msg);
@@ -26,32 +27,66 @@ function broadcastLog(msg) {
   if (logBuffer.length > 10000) logBuffer = logBuffer.slice(-10000);
 }
 
-io.on("connection", (socket) => {
-  socket.emit("miner-log", logBuffer);
-});
+function stopMiner() {
+  if (currentMiner) {
+    broadcastLog("\n⏹️ Stopping miner...\n");
+    currentMiner.kill();
+    currentMiner = null;
+  }
+}
 
 function runMiner() {
-  const miner = spawn("node", [minerPath]);
+  if (currentMiner) {
+    broadcastLog("⚠️ Miner already running\n");
+    return;
+  }
+  
+  currentMiner = spawn("node", [minerPath]);
 
-  miner.stdout.on("data", (data) => {
+  currentMiner.stdout.on("data", (data) => {
     const msg = data.toString();
     broadcastLog(msg);
     process.stdout.write(msg);
   });
 
-  miner.stderr.on("data", (data) => {
+  currentMiner.stderr.on("data", (data) => {
     const msg = data.toString();
     broadcastLog(msg);
     process.stderr.write(msg);
   });
 
-  miner.on("exit", (code) => {
+  currentMiner.on("exit", (code) => {
     const msg = `Miner exited with code ${code}\n`;
     broadcastLog(msg);
     console.log(msg);
+    currentMiner = null;
   });
 }
 
+// API endpoints
+app.post("/stop", (req, res) => {
+  stopMiner();
+  res.json({ status: "stopped" });
+});
+
+app.post("/restart", (req, res) => {
+  stopMiner();
+  setTimeout(() => {
+    runMiner();
+  }, 1000);
+  res.json({ status: "restarting" });
+});
+
+app.get("/status", (req, res) => {
+  res.json({ running: currentMiner !== null });
+});
+
+io.on("connection", (socket) => {
+  socket.emit("miner-log", logBuffer);
+  socket.emit("miner-status", { running: currentMiner !== null });
+});
+
+// Run test before starting miner
 const test = spawn("node", [testPath], { cwd: __dirname, stdio: "inherit" });
 
 test.on("exit", (code) => {
