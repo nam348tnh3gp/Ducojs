@@ -4,19 +4,37 @@ const path = require("path");
 const http = require("http");
 const socketIO = require("socket.io");
 const stripAnsi = require("strip-ansi").default;
+const fs = require("fs");
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
+// Middleware
 app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json());
 
+// Routes
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-const minerPath = path.join(__dirname, "miner", "index.js");
-const testPath = path.join(__dirname, "miner", "testLib.js"); // Sửa ở đây
+// Đường dẫn
+const minerDir = path.join(__dirname, "miner");
+const minerPath = path.join(minerDir, "index.js");
+const testPath = path.join(minerDir, "testLib.js");
+
+// Kiểm tra file tồn tại
+if (!fs.existsSync(minerPath)) {
+  console.error(`❌ Không tìm thấy miner tại: ${minerPath}`);
+  process.exit(1);
+}
+
+if (!fs.existsSync(testPath)) {
+  console.error(`❌ Không tìm thấy testLib tại: ${testPath}`);
+  process.exit(1);
+}
+
 let logBuffer = "";
 let currentMiner = null;
 
@@ -24,53 +42,87 @@ function broadcastLog(msg) {
   const clean = stripAnsi(msg);
   io.emit("miner-log", clean);
   logBuffer += clean;
-  if (logBuffer.length > 10000) logBuffer = logBuffer.slice(-10000);
+  if (logBuffer.length > 50000) {
+    logBuffer = logBuffer.slice(-50000);
+  }
 }
 
 function stopMiner() {
-  if (currentMiner) {
-    broadcastLog("\n⏹️ Stopping miner...\n");
-    currentMiner.kill();
-    currentMiner = null;
-  }
+  return new Promise((resolve) => {
+    if (currentMiner && !currentMiner.killed) {
+      broadcastLog("\n⏹️ Stopping miner...\n");
+      currentMiner.on("exit", () => {
+        currentMiner = null;
+        resolve();
+      });
+      currentMiner.kill("SIGTERM");
+      
+      setTimeout(() => {
+        if (currentMiner && !currentMiner.killed) {
+          currentMiner.kill("SIGKILL");
+        }
+      }, 3000);
+    } else {
+      resolve();
+    }
+  });
 }
 
 function runMiner() {
-  if (currentMiner) {
+  if (currentMiner && !currentMiner.killed) {
     broadcastLog("⚠️ Miner already running\n");
-    return;
+    return false;
   }
   
-  currentMiner = spawn("node", [minerPath]);
+  broadcastLog("🚀 Starting miner...\n");
+  
+  // Set NODE_PATH để Node có thể tìm module trong thư mục libducohash
+  const env = { ...process.env };
+  env.NODE_PATH = path.join(__dirname, "libducohash");
+  
+  // Chạy miner với environment variables
+  currentMiner = spawn("node", [minerPath], {
+    cwd: minerDir,
+    env: env
+  });
 
   currentMiner.stdout.on("data", (data) => {
     const msg = data.toString();
     broadcastLog(msg);
-    process.stdout.write(msg);
+    console.log("[MINER]", msg.trim());
   });
 
   currentMiner.stderr.on("data", (data) => {
     const msg = data.toString();
     broadcastLog(msg);
-    process.stderr.write(msg);
+    console.error("[MINER ERROR]", msg.trim());
   });
 
-  currentMiner.on("exit", (code) => {
-    const msg = `Miner exited with code ${code}\n`;
+  currentMiner.on("error", (err) => {
+    const msg = `Miner process error: ${err.message}\n`;
+    broadcastLog(msg);
+    console.error(msg);
+    currentMiner = null;
+  });
+
+  currentMiner.on("exit", (code, signal) => {
+    const msg = `Miner exited with code ${code}, signal ${signal}\n`;
     broadcastLog(msg);
     console.log(msg);
     currentMiner = null;
   });
+  
+  return true;
 }
 
 // API endpoints
-app.post("/stop", (req, res) => {
-  stopMiner();
-  res.json({ status: "stopped" });
+app.post("/stop", async (req, res) => {
+  await stopMiner();
+  res.json({ status: "stopped", running: false });
 });
 
-app.post("/restart", (req, res) => {
-  stopMiner();
+app.post("/restart", async (req, res) => {
+  await stopMiner();
   setTimeout(() => {
     runMiner();
   }, 1000);
@@ -78,27 +130,100 @@ app.post("/restart", (req, res) => {
 });
 
 app.get("/status", (req, res) => {
-  res.json({ running: currentMiner !== null });
+  res.json({ 
+    running: currentMiner !== null && !currentMiner.killed,
+    pid: currentMiner ? currentMiner.pid : null
+  });
 });
 
+app.get("/logs", (req, res) => {
+  res.json({ logs: logBuffer });
+});
+
+app.post("/clear-logs", (req, res) => {
+  logBuffer = "";
+  broadcastLog("📋 Log cleared\n");
+  res.json({ status: "cleared" });
+});
+
+// Socket.IO
 io.on("connection", (socket) => {
+  console.log("Client connected");
   socket.emit("miner-log", logBuffer);
-  socket.emit("miner-status", { running: currentMiner !== null });
+  socket.emit("miner-status", { 
+    running: currentMiner !== null && !currentMiner.killed 
+  });
+  
+  socket.on("disconnect", () => {
+    console.log("Client disconnected");
+  });
 });
 
-// Run test before starting miner
-const test = spawn("node", [testPath], { cwd: __dirname, stdio: "inherit" });
-
-test.on("exit", (code) => {
-  if (code === 0) {
-    console.log("✅ TestLib OK, khởi chạy miner...");
-    runMiner();
+// Khởi động
+async function start() {
+  console.log("🔍 Kiểm tra môi trường...");
+  
+  // Kiểm tra và build libducohash nếu cần
+  const libPath = path.join(__dirname, "libducohash");
+  const hasherPath = path.join(libPath, "index.js");
+  
+  if (!fs.existsSync(hasherPath)) {
+    console.log("📦 Building libducohash...");
+    const build = spawn("npm", ["run", "build-fast"], {
+      cwd: libPath,
+      stdio: "inherit"
+    });
+    
+    build.on("exit", (code) => {
+      if (code === 0) {
+        console.log("✅ Build successful");
+        startMiner();
+      } else {
+        console.error("❌ Build failed, continuing without FastHash...");
+        startMiner();
+      }
+    });
   } else {
-    console.error("❌ TestLib FAILED. Không khởi chạy miner.");
+    startMiner();
   }
+}
+
+function startMiner() {
+  console.log("🔍 Kiểm tra testLib...");
+  
+  const test = spawn("node", [testPath], { 
+    cwd: minerDir,
+    env: { ...process.env, NODE_PATH: path.join(__dirname, "libducohash") },
+    stdio: "inherit" 
+  });
+  
+  test.on("exit", (code) => {
+    if (code === 0) {
+      console.log("✅ TestLib OK, khởi chạy miner...");
+      runMiner();
+    } else {
+      console.error(`❌ TestLib FAILED with code ${code}. Không khởi chạy miner.`);
+      broadcastLog(`❌ TestLib failed with code ${code}\n`);
+    }
+  });
+}
+
+// Xử lý khi tắt server
+process.on("SIGINT", async () => {
+  console.log("\n🛑 Shutting down...");
+  await stopMiner();
+  process.exit(0);
 });
 
+process.on("SIGTERM", async () => {
+  console.log("\n🛑 Shutting down...");
+  await stopMiner();
+  process.exit(0);
+});
+
+// Khởi động server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`✅ Web UI đang chạy tại http://localhost:${PORT}`);
+  console.log(`✅ Web UI running at http://localhost:${PORT}`);
+  start();
 });
