@@ -23,6 +23,7 @@ app.get("/", (req, res) => {
 const minerDir = path.join(__dirname, "miner");
 const minerPath = path.join(minerDir, "index.js");
 const testPath = path.join(minerDir, "testLib.js");
+const libPath = path.join(__dirname, "libducohash");
 
 // Kiểm tra file tồn tại
 if (!fs.existsSync(minerPath)) {
@@ -78,7 +79,10 @@ function runMiner() {
   
   // Set NODE_PATH để Node có thể tìm module trong thư mục libducohash
   const env = { ...process.env };
-  env.NODE_PATH = path.join(__dirname, "libducohash");
+  env.NODE_PATH = libPath;
+  
+  // Thêm các biến môi trường để báo hiệu FastHash đã được build
+  env.ENABLE_FASTHASH = fs.existsSync(path.join(libPath, "build")) ? "1" : "0";
   
   // Chạy miner với environment variables
   currentMiner = spawn("node", [minerPath], {
@@ -159,41 +163,38 @@ io.on("connection", (socket) => {
   });
 });
 
-// Khởi động
-async function start() {
-  console.log("🔍 Kiểm tra môi trường...");
-  
-  // Kiểm tra và build libducohash nếu cần
-  const libPath = path.join(__dirname, "libducohash");
+// Kiểm tra và build libducohash trước khi chạy (chỉ chạy trong development)
+async function checkAndBuildLib() {
+  const buildPath = path.join(libPath, "build");
   const hasherPath = path.join(libPath, "index.js");
   
   if (!fs.existsSync(hasherPath)) {
-    console.log("📦 Building libducohash...");
-    const build = spawn("npm", ["run", "build-fast"], {
-      cwd: libPath,
-      stdio: "inherit"
-    });
-    
-    build.on("exit", (code) => {
-      if (code === 0) {
-        console.log("✅ Build successful");
-        startMiner();
-      } else {
-        console.error("❌ Build failed, continuing without FastHash...");
-        startMiner();
-      }
-    });
-  } else {
-    startMiner();
+    console.log("⚠️ libducohash not found at:", libPath);
+    return false;
   }
+  
+  // Kiểm tra xem FastHash đã được build chưa
+  if (!fs.existsSync(buildPath)) {
+    console.log("📦 FastHash not built. Miner will use pure JS (slower)");
+    console.log("💡 To enable FastHash, build manually: cd libducohash && npm install && npm run build-fast");
+    return false;
+  }
+  
+  console.log("✅ FastHash is available (accelerated mining)");
+  return true;
 }
 
+// Khởi động miner
 function startMiner() {
   console.log("🔍 Kiểm tra testLib...");
   
+  // Set environment cho test
+  const testEnv = { ...process.env };
+  testEnv.NODE_PATH = libPath;
+  
   const test = spawn("node", [testPath], { 
     cwd: minerDir,
-    env: { ...process.env, NODE_PATH: path.join(__dirname, "libducohash") },
+    env: testEnv,
     stdio: "inherit" 
   });
   
@@ -205,6 +206,14 @@ function startMiner() {
       console.error(`❌ TestLib FAILED with code ${code}. Không khởi chạy miner.`);
       broadcastLog(`❌ TestLib failed with code ${code}\n`);
     }
+  });
+  
+  test.on("error", (err) => {
+    console.error(`❌ Cannot run testLib: ${err.message}`);
+    broadcastLog(`❌ Cannot run testLib: ${err.message}\n`);
+    // Vẫn chạy miner nếu testLib lỗi
+    console.log("⚠️ Starting miner anyway...");
+    runMiner();
   });
 }
 
@@ -223,7 +232,12 @@ process.on("SIGTERM", async () => {
 
 // Khởi động server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`✅ Web UI running at http://localhost:${PORT}`);
-  start();
+  
+  // Kiểm tra libducohash
+  await checkAndBuildLib();
+  
+  // Khởi động miner
+  startMiner();
 });
