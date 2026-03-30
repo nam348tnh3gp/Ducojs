@@ -1,14 +1,11 @@
-```markdown
-# ⛏️ DUCO Web Miner - Node.js + Rust FastHash
+# ⛏️ DUCO Web Miner
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org/)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey)](https://github.com/nam348tnh3gp/Ducojs)
+[![Node.js](https://img.shields.io/badge/Node.js-18.x-green)](https://nodejs.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
 
-**A high-performance Duino-Coin miner with optional Rust acceleration and real-time web dashboard**
-
-> ⚡ **50x faster** with Rust FastHash | 🌐 **Real-time monitoring** via WebSocket | 🚀 **Multi-threaded** Node.js cluster
+> **High-performance Duino-Coin miner with optional Rust acceleration + real-time web dashboard**
 
 ---
 
@@ -16,29 +13,27 @@
 
 | Feature | Description |
 |---------|-------------|
-| 🚀 **Rust FastHash** | Optional native acceleration (up to 50x speed boost) |
+| 🚀 **Rust FastHash** | Optional native acceleration (up to **50x faster**) |
 | 📊 **Web Dashboard** | Real-time mining logs with Socket.IO |
 | 🔄 **Auto-fallback** | Gracefully falls back to pure JS if Rust unavailable |
-| 🧵 **Multi-threaded** | Uses Node.js cluster for all CPU cores |
-| 🎯 **Smart Pool Selection** | Auto-connects to fastest Duino-Coin pool |
-| ⚙️ **Configurable** | Easy `config.ini` for username, threads, difficulty |
-| 🔌 **Auto-reconnect** | Automatically reconnects on connection loss |
-| 🎨 **Beautiful CLI** | Colorful console output with real-time stats table |
+| 🧵 **Multi-threaded** | Uses all CPU cores via Node.js cluster |
+| 🎯 **Smart Pool** | Auto-connects to fastest Duino-Coin pool |
+| ⚙️ **Easy Config** | Simple `config.ini` file |
+| 🔌 **Auto-reconnect** | Reconnects automatically on connection loss |
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-
 - **Node.js** 16.0 or higher
-- **Rust** (optional - for FastHash acceleration)
 - **npm** or **yarn**
+- **Rust** (optional - for FastHash acceleration)
 
 ### Installation
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/nam348tnh3gp/Ducojs.git
 cd Ducojs
 
@@ -48,9 +43,8 @@ npm install
 # (Optional) Build Rust FastHash for 50x performance boost
 npm run build-fast
 
-# Start the miner + web dashboard
+# Start miner + web dashboard
 npm start
-```
 
 Configuration
 
