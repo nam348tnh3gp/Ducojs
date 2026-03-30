@@ -226,7 +226,7 @@ Low hashrate?
 
 📝 License
 
-MIT License - see LICENSE file for details
+Apache License - see LICENSE file for details
 
 ---
 
