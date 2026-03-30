@@ -118,9 +118,9 @@ Feature Description
 
 ⚡ Performance Comparison
 
-Implementation Speed (H/s) Notes
+Implementation Speed (kH/s) Notes
 Pure JavaScript ~10-50 No optimization
-Rust FastHash ~500-2,000 50x faster using SIMD
+Rust FastHash ~100-200 10x faster using SIMD
 
 Benchmark on Intel i7-10750H, 4 threads, LOW difficulty
 
