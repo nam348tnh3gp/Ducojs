@@ -7,7 +7,8 @@ const fs = require('fs');
 const ini = require('ini');
 const path = require("path");
 
-const CONFIG_FILE = path.join(__dirname, "../config.ini");
+// SỬA: config.ini nằm trong cùng thư mục với file này (miner/)
+const CONFIG_FILE = path.join(__dirname, "config.ini");
 
 let user = "",
     processes = 0,
@@ -20,12 +21,22 @@ const loadConfig = async () => {
     return new Promise((resolve, reject) => {
         if (fs.existsSync(CONFIG_FILE)) {
             fs.readFile(CONFIG_FILE, 'utf-8', (err, data) => {
-                if (err) throw err;
-                config = ini.parse(data);
-                resolve(config);
+                if (err) {
+                    console.error(`❌ Error reading config file: ${err.message}`);
+                    reject(err);
+                    return;
+                }
+                try {
+                    config = ini.parse(data);
+                    console.log(`✅ Config loaded from: ${CONFIG_FILE}`);
+                    resolve(config);
+                } catch (parseErr) {
+                    console.error(`❌ Error parsing config: ${parseErr.message}`);
+                    reject(parseErr);
+                }
             });
         } else {
-            console.log("Config file not found, creating default...");
+            console.log(`⚠️ Config file not found at ${CONFIG_FILE}, creating default...`);
             let configData = {
                 "username": "Tudz1011",
                 "mining_key": "101120",
@@ -35,8 +46,13 @@ const loadConfig = async () => {
             };
             config = configData;
             fs.writeFile(CONFIG_FILE, ini.stringify(configData), (err) => {
-                if (err) throw err;
-                resolve(config);
+                if (err) {
+                    console.error(`❌ Error creating config file: ${err.message}`);
+                    reject(err);
+                } else {
+                    console.log(`✅ Default config created at ${CONFIG_FILE}`);
+                    resolve(config);
+                }
             });
         }
     });
@@ -252,7 +268,7 @@ const startWorker = () => {
         console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}, hashlib=${hashlib}`);
         connectToPool();
     }).catch((err) => {
-        console.log(`[${workerData.workerId}] ❌ Failed to load config: ${err}`);
+        console.log(`[${workerData.workerId}] ❌ Failed to load config: ${err.message}`);
         setTimeout(() => startWorker(), 5000);
     });
 };
@@ -274,6 +290,7 @@ if (cluster.isMaster) {
         }
 
         console.log("\n🚀 ========== DUCO MINER STARTING ==========");
+        console.log(`   📁 Config path: ${CONFIG_FILE}`);
         console.log(`   👤 Username: ${user}`);
         console.log(`   🔑 Mining Key: ${mining_key.substring(0, 3)}***`);
         console.log(`   🧵 Threads: ${processes}`);
@@ -327,6 +344,9 @@ if (cluster.isMaster) {
                 }, 3000);
             });
         }
+    }).catch((err) => {
+        console.error(`❌ Failed to start master: ${err.message}`);
+        process.exit(1);
     });
 } else {
     // Worker process
