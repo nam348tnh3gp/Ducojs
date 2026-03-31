@@ -5,7 +5,6 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "postinstall": "cd libducohasher && npm install && npm run build-fast || echo '⚠️ FastHash build failed, using JS fallback'",
     "build-fast": "cd libducohasher && npm install 2>/dev/null || echo '⚠️ FastHash build skipped'",
     "test": "node testLib.js"
   },
