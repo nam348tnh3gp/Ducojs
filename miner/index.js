@@ -121,12 +121,8 @@ const startMining = async (socket, data, reconnectCallback) => {
             const diff = parseInt(job[2]);
             const startTime = Date.now();
 
-            // Use unified mineJob function
-            const result = await utils.mineJob(prev, toFind, diff, intensity, hashlib, (current, max) => {
-                if (current % 50000 === 0 && current > 0) {
-                    console.log(`[${data.workerId}] 🔍 Progress: ${current}/${max} nonces (${Math.round(current/max*100)}%)`);
-                }
-            });
+            // Use unified mineJob function - ĐÃ XÓA PROGRESS LOG
+            const result = await utils.mineJob(prev, toFind, diff, intensity, hashlib, null);
             
             data.hashes += result.hashes;
             
