@@ -43,18 +43,20 @@ const calculateHashrate = (hashes) => {
 // ================= POOL CONFIG =================
 const getPool = async () => {
     return new Promise((resolve, reject) => {
-        const poolPath = path.join(__dirname, "../../pools.json");
+        // SỬA: pools.json nằm cùng thư mục với index.js (miner/)
+        const poolPath = path.join(__dirname, "../pools.json");
         
         if (fs.existsSync(poolPath)) {
             try {
                 const raw = fs.readFileSync(poolPath, "utf-8");
                 const data = JSON.parse(raw);
+                console.log(`✅ Loaded pools.json from: ${poolPath}`);
                 resolve(data);
             } catch (err) {
                 reject("❌ Error reading pools.json: " + err.message);
             }
         } else {
-            reject("⚠️ pools.json not found");
+            reject("⚠️ pools.json not found at: " + poolPath);
         }
     });
 };
