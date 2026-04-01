@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-neon = "0.10.1"
-sha1_smol = "1.0"
+neon = "0.16"
+sha1_smol = "1.0.1"
 hex = "0.4"
 itoa = "1.0"
 
