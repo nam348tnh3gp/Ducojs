@@ -7,7 +7,7 @@ const fs = require('fs');
 const ini = require('ini');
 const path = require("path");
 
-// SỬA: config.ini nằm trong cùng thư mục với file này (miner/)
+// config.ini nằm trong cùng thư mục với file này (miner/)
 const CONFIG_FILE = path.join(__dirname, "config.ini");
 
 let user = "",
@@ -94,11 +94,12 @@ const startMining = async (socket, data, reconnectCallback) => {
     let promiseSocket = new PromiseSocket(socket);
     promiseSocket.setTimeout(15000);
     let isRunning = true;
-    let intensity = 95; // Default intensity, can be read from config
+    let intensity = 95;
 
     while (isRunning) {
         try {
-            socket.write("JOB," + user + "," + difficulty + "," + mining_key);
+            // ✅ THÊM \n vào cuối message
+            socket.write("JOB," + user + "," + difficulty + "," + mining_key + "\n");
             
             const jobData = await Promise.race([
                 promiseSocket.read(),
@@ -110,7 +111,8 @@ const startMining = async (socket, data, reconnectCallback) => {
                 break;
             }
             
-            let job = jobData.split(",");
+            // ✅ THÊM .toString() để xử lý Buffer
+            let job = jobData.toString().split(",");
             if (job.length < 3) {
                 console.log(`[${data.workerId}] Invalid job received: ${job}`);
                 continue;
@@ -121,7 +123,6 @@ const startMining = async (socket, data, reconnectCallback) => {
             const diff = parseInt(job[2]);
             const startTime = Date.now();
 
-            // Use unified mineJob function - ĐÃ XÓA PROGRESS LOG
             const result = await utils.mineJob(prev, toFind, diff, intensity, hashlib, null);
             
             data.hashes += result.hashes;
@@ -129,13 +130,13 @@ const startMining = async (socket, data, reconnectCallback) => {
             if (result.nonce > 0) {
                 const elapsed = (Date.now() - startTime) / 1000;
                 const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
-                socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}`);
+                // ✅ THÊM \n vào cuối message
+                socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}\n`);
             } else {
                 console.log(`[${data.workerId}] No nonce found for this job`);
                 continue;
             }
 
-            // Wait for pool response
             const response = await Promise.race([
                 promiseSocket.read(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Response timeout")), 5000))
@@ -146,17 +147,19 @@ const startMining = async (socket, data, reconnectCallback) => {
                 break;
             }
 
-            if (response.includes("GOOD")) {
+            // ✅ THÊM .toString() để xử lý Buffer
+            const responseStr = response.toString();
+            if (responseStr.includes("GOOD")) {
                 data.accepted++;
                 console.log(`[${data.workerId}] ✅ Share accepted! Total: ${data.accepted}`);
-            } else if (response.includes("BLOCK")) {
+            } else if (responseStr.includes("BLOCK")) {
                 console.log(`[${data.workerId}] ⛓️ New block found!`);
                 data.accepted++;
-            } else if (response.includes("BAD")) {
+            } else if (responseStr.includes("BAD")) {
                 data.rejected++;
-                console.log(`[${data.workerId}] ❌ Share rejected: ${response}`);
+                console.log(`[${data.workerId}] ❌ Share rejected: ${responseStr}`);
             } else {
-                console.log(`[${data.workerId}] ℹ️ Pool response: ${response}`);
+                console.log(`[${data.workerId}] ℹ️ Pool response: ${responseStr}`);
             }
 
             process.send(data);
@@ -196,7 +199,6 @@ const startWorker = () => {
         
         if (reconnectTimer) clearTimeout(reconnectTimer);
         
-        // Hiển thị FastHash status khi worker khởi động
         if (utils.hasFastHash) {
             console.log(`[${workerData.workerId}] 🚀 FastHash (Rust) is ACTIVE - mining accelerated!`);
         } else {
@@ -345,6 +347,5 @@ if (cluster.isMaster) {
         process.exit(1);
     });
 } else {
-    // Worker process
     startWorker();
 }
