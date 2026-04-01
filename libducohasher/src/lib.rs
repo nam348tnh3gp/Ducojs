@@ -7,8 +7,12 @@ fn sha1_to_hex(input: &str) -> String {
     hasher.update(input.as_bytes());
     let result = hasher.digest();
     
-    // Convert bytes to hex string
-    result.iter().map(|b| format!("{:02x}", b)).collect()
+    // Digest là [u8; 20], convert trực tiếp
+    let mut hex_string = String::with_capacity(40);
+    for byte in result.bytes() {
+        hex_string.push_str(&format!("{:02x}", byte));
+    }
+    hex_string
 }
 
 // ================= DUCO HASHER =================
@@ -36,9 +40,10 @@ fn ducos1_hash(base: &str, target_hex: &str, diff: u32) -> Option<(u64, f64, u12
 
 // ================= NEON BINDINGS =================
 fn solve_job(mut cx: FunctionContext) -> JsResult<JsObject> {
-    let base = cx.argument::<JsString>(0)?.value(&mut cx);
-    let target_hex = cx.argument::<JsString>(1)?.value(&mut cx);
-    let diff = cx.argument::<JsNumber>(2)?.value(&mut cx) as u32;
+    // Lấy arguments - KHÔNG dùng value() với argument
+    let base = cx.argument::<JsString>(0)?.value();
+    let target_hex = cx.argument::<JsString>(1)?.value();
+    let diff = cx.argument::<JsNumber>(2)?.value() as u32;
     
     let result = ducos1_hash(&base, &target_hex, diff);
     
@@ -53,7 +58,7 @@ fn solve_job(mut cx: FunctionContext) -> JsResult<JsObject> {
         obj.set(&mut cx, "hashrate", hashrate_val)?;
         obj.set(&mut cx, "elapsedMs", elapsed_val)?;
     } else {
-        // Return empty object with nonce = 0
+        // Return object với nonce = 0
         let nonce_val = cx.number(0.0);
         let hashrate_val = cx.number(0.0);
         let elapsed_val = cx.number(0.0);
