@@ -23,11 +23,16 @@ fn ducos1_hash(data: &[u8], expected_hash: &[u8], diff: u32) -> u64 {
 
 // ================= NEON BINDINGS =================
 fn solve_job(mut cx: FunctionContext) -> JsResult<JsNumber> {
-    let base = cx.argument::<JsString>(0)?.value(&mut cx);
-    let target_hex = cx.argument::<JsString>(1)?.value(&mut cx);
-    let diff = cx.argument::<JsNumber>(2)?.value(&mut cx) as u32;
+    // Trong neon 1.0, dùng .value() không cần tham số
+    let base = cx.argument::<JsString>(0)?.value();
+    let target_hex = cx.argument::<JsString>(1)?.value();
+    let diff = cx.argument::<JsNumber>(2)?.value() as u32;
     
-    let target_bytes = hex::decode(&target_hex).unwrap_or_default();
+    let target_bytes = match hex::decode(&target_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return cx.throw_error("Invalid hex string")
+    };
+    
     let data = base.as_bytes();
     
     let nonce = ducos1_hash(data, &target_bytes, diff);
@@ -35,7 +40,7 @@ fn solve_job(mut cx: FunctionContext) -> JsResult<JsNumber> {
     Ok(cx.number(nonce as f64))
 }
 
-// ================= MODULE REGISTRATION =================
+// ================= MODULE REGISTRATION cho neon 1.0 =================
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("solveJob", solve_job)?;
