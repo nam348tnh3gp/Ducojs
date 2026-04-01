@@ -9,7 +9,7 @@ fn sha1_to_hex(input: &str) -> String {
     
     // Digest là [u8; 20], convert trực tiếp
     let mut hex_string = String::with_capacity(40);
-    for byte in result.bytes() {
+    for byte in result.iter() {
         hex_string.push_str(&format!("{:02x}", byte));
     }
     hex_string
@@ -40,10 +40,10 @@ fn ducos1_hash(base: &str, target_hex: &str, diff: u32) -> Option<(u64, f64, u12
 
 // ================= NEON BINDINGS =================
 fn solve_job(mut cx: FunctionContext) -> JsResult<JsObject> {
-    // Lấy arguments - KHÔNG dùng value() với argument
-    let base = cx.argument::<JsString>(0)?.value();
-    let target_hex = cx.argument::<JsString>(1)?.value();
-    let diff = cx.argument::<JsNumber>(2)?.value() as u32;
+    // Lấy arguments
+    let base = cx.argument::<JsString>(0)?.value(&mut cx);
+    let target_hex = cx.argument::<JsString>(1)?.value(&mut cx);
+    let diff = cx.argument::<JsNumber>(2)?.value(&mut cx) as u32;
     
     let result = ducos1_hash(&base, &target_hex, diff);
     
