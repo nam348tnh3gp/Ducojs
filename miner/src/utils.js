@@ -13,8 +13,8 @@ let hasFastHash = false;
 let fastHashModule = null;
 
 try {
-    // Đường dẫn đúng - libducohasher ở thư mục cha (Ducojs/)
-    const addonPath = path.join(__dirname, '../libducohasher');
+    // Đường dẫn đúng: từ miner/src/ lên 2 cấp đến thư mục gốc Ducojs/
+    const addonPath = path.join(__dirname, '../../libducohasher');
     
     // Kiểm tra các vị trí có thể có file .node
     const possiblePaths = [
@@ -22,7 +22,8 @@ try {
         path.join(addonPath, 'target/release/libducohasher.node'),
         path.join(addonPath, 'target/release/liblibducohasher.so'),
         path.join(addonPath, 'target/release/liblibducohasher.dylib'),
-        path.join(addonPath, 'target/release/libducohasher.so')
+        path.join(addonPath, 'target/release/libducohasher.so'),
+        path.join(addonPath, 'target/release/libducohasher.dylib')
     ];
     
     let foundPath = null;
@@ -47,7 +48,8 @@ try {
             console.log('⚠️ [FASTHASH] Available exports:', Object.keys(fastHashModule));
         }
     } else {
-        console.log('⚠️ [FASTHASH] libducohasher not found. Checked paths:');
+        console.log('⚠️ [FASTHASH] libducohasher not found at:', addonPath);
+        console.log('   Checked paths:');
         possiblePaths.forEach(p => console.log('   -', p));
         console.log('   💡 To enable FastHash, build it with: cd /root/Ducojs && npm run build-fast');
     }
@@ -166,24 +168,28 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
                 result = fastHashModule.solveJobFull(last_h, exp_h, diff, 0);
             }
             
-            if (result && result.nonce !== undefined && result.nonce !== 0) {
-                const elapsed = (Date.now() - startTime) / 1000;
-                const hashrate = result.hashrate || (result.nonce / elapsed);
-                return {
-                    nonce: result.nonce,
-                    hashrate: hashrate,
-                    elapsed: elapsed,
-                    hashes: result.nonce
-                };
-            } else if (result && typeof result === 'number' && result > 0) {
-                // Nếu trả về number trực tiếp
-                const elapsed = (Date.now() - startTime) / 1000;
-                return {
-                    nonce: result,
-                    hashrate: result / elapsed,
-                    elapsed: elapsed,
-                    hashes: result
-                };
+            if (result) {
+                // Nếu result là object có nonce
+                if (result.nonce !== undefined && result.nonce !== 0) {
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    const hashrate = result.hashrate || (result.nonce / elapsed);
+                    return {
+                        nonce: result.nonce,
+                        hashrate: hashrate,
+                        elapsed: elapsed,
+                        hashes: result.nonce
+                    };
+                } 
+                // Nếu result là number trực tiếp
+                else if (typeof result === 'number' && result > 0) {
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    return {
+                        nonce: result,
+                        hashrate: result / elapsed,
+                        elapsed: elapsed,
+                        hashes: result
+                    };
+                }
             }
         } catch (err) {
             console.log(`⚠️ FastHash error: ${err.message}, falling back to JS`);
