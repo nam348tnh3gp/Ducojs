@@ -13,14 +13,16 @@ let hasFastHash = false;
 let fastHashModule = null;
 
 try {
-    // SỬA: đường dẫn đúng - libducohasher ở thư mục cha
+    // Đường dẫn đúng - libducohasher ở thư mục cha (Ducojs/)
     const addonPath = path.join(__dirname, '../libducohasher');
     
     // Kiểm tra các vị trí có thể có file .node
     const possiblePaths = [
-        addonPath + '/index.node',
-        addonPath + '/native/index.node',
-        addonPath + '/target/release/libducohasher.node'
+        path.join(addonPath, 'index.node'),
+        path.join(addonPath, 'target/release/libducohasher.node'),
+        path.join(addonPath, 'target/release/liblibducohasher.so'),
+        path.join(addonPath, 'target/release/liblibducohasher.dylib'),
+        path.join(addonPath, 'target/release/libducohasher.so')
     ];
     
     let foundPath = null;
@@ -39,16 +41,19 @@ try {
         // Kiểm tra hàm solveJob có tồn tại
         if (fastHashModule.solveJob) {
             console.log('✅ [FASTHASH] solveJob function available');
+        } else if (fastHashModule.solveJobFull) {
+            console.log('✅ [FASTHASH] solveJobFull function available');
         } else {
             console.log('⚠️ [FASTHASH] Available exports:', Object.keys(fastHashModule));
         }
     } else {
-        console.log('⚠️ [FASTHASH] libducohasher not found at:', addonPath);
-        console.log('   💡 To enable FastHash, build it with: npm run build-fast');
+        console.log('⚠️ [FASTHASH] libducohasher not found. Checked paths:');
+        possiblePaths.forEach(p => console.log('   -', p));
+        console.log('   💡 To enable FastHash, build it with: cd /root/Ducojs && npm run build-fast');
     }
 } catch (e) {
     console.log('⚠️ [FASTHASH] Cannot load native addon: ' + e.message);
-    console.log('   💡 To enable FastHash, build it with: npm run build-fast');
+    console.log('   💡 To enable FastHash, build it with: cd /root/Ducojs && npm run build-fast');
     hasFastHash = false;
 }
 
@@ -148,17 +153,36 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
     let hashes = 0;
     
     // ===== FASTHASH PATH (Rust native) =====
-    // SỬA: dùng solveJob thay vì ducos1, chỉ 3 tham số
-    if (hasFastHash && fastHashModule && fastHashModule.solveJob) {
+    if (hasFastHash && fastHashModule) {
         try {
-            const result = fastHashModule.solveJob(last_h, exp_h, diff);
+            let result = null;
+            
+            // Thử dùng solveJob trước
+            if (fastHashModule.solveJob) {
+                result = fastHashModule.solveJob(last_h, exp_h, diff);
+            } 
+            // Thử dùng solveJobFull nếu có
+            else if (fastHashModule.solveJobFull) {
+                result = fastHashModule.solveJobFull(last_h, exp_h, diff, 0);
+            }
+            
             if (result && result.nonce !== undefined && result.nonce !== 0) {
                 const elapsed = (Date.now() - startTime) / 1000;
+                const hashrate = result.hashrate || (result.nonce / elapsed);
                 return {
                     nonce: result.nonce,
-                    hashrate: result.hashrate,
+                    hashrate: hashrate,
                     elapsed: elapsed,
-                    hashes: result.nonce || maxNonce
+                    hashes: result.nonce
+                };
+            } else if (result && typeof result === 'number' && result > 0) {
+                // Nếu trả về number trực tiếp
+                const elapsed = (Date.now() - startTime) / 1000;
+                return {
+                    nonce: result,
+                    hashrate: result / elapsed,
+                    elapsed: elapsed,
+                    hashes: result
                 };
             }
         } catch (err) {
