@@ -13,14 +13,38 @@ let hasFastHash = false;
 let fastHashModule = null;
 
 try {
-    const addonPath = path.join(__dirname, '../../libducohasher');
-    // Kiểm tra file tồn tại trước khi require
-    if (fs.existsSync(addonPath) || fs.existsSync(addonPath + '/native/index.node')) {
-        fastHashModule = require(addonPath);
+    // SỬA: đường dẫn đúng - libducohasher ở thư mục cha
+    const addonPath = path.join(__dirname, '../libducohasher');
+    
+    // Kiểm tra các vị trí có thể có file .node
+    const possiblePaths = [
+        addonPath + '/index.node',
+        addonPath + '/native/index.node',
+        addonPath + '/target/release/libducohasher.node'
+    ];
+    
+    let foundPath = null;
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+            foundPath = p;
+            break;
+        }
+    }
+    
+    if (foundPath) {
+        fastHashModule = require(foundPath);
         hasFastHash = true;
-        console.log('✅ [FASTHASH] Rust native addon loaded successfully');
+        console.log('✅ [FASTHASH] Rust native addon loaded from:', foundPath);
+        
+        // Kiểm tra hàm solveJob có tồn tại
+        if (fastHashModule.solveJob) {
+            console.log('✅ [FASTHASH] solveJob function available');
+        } else {
+            console.log('⚠️ [FASTHASH] Available exports:', Object.keys(fastHashModule));
+        }
     } else {
-        console.log('⚠️ [FASTHASH] libducohasher not found, using pure JS');
+        console.log('⚠️ [FASTHASH] libducohasher not found at:', addonPath);
+        console.log('   💡 To enable FastHash, build it with: npm run build-fast');
     }
 } catch (e) {
     console.log('⚠️ [FASTHASH] Cannot load native addon: ' + e.message);
@@ -43,7 +67,6 @@ const calculateHashrate = (hashes) => {
 // ================= POOL CONFIG =================
 const getPool = async () => {
     return new Promise((resolve, reject) => {
-        // SỬA: pools.json nằm cùng thư mục với index.js (miner/)
         const poolPath = path.join(__dirname, "../pools.json");
         
         if (fs.existsSync(poolPath)) {
@@ -111,8 +134,8 @@ const _sha1 = (hashlib, str) => {
 // ================= MINING FUNCTION (Unified) =================
 /**
  * DUCOS1 mining algorithm
- * @param {string} last_h - Last hash from pool
- * @param {string} exp_h - Expected hash to find
+ * @param {string} last_h - Last hash from pool (base)
+ * @param {string} exp_h - Expected hash to find (target)
  * @param {number} diff - Difficulty
  * @param {number} intensity - Mining intensity (0-100)
  * @param {string} hashlib - Hash library name (for JS fallback)
@@ -125,15 +148,19 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
     let hashes = 0;
     
     // ===== FASTHASH PATH (Rust native) =====
-    if (hasFastHash && fastHashModule && fastHashModule.ducos1) {
+    // SỬA: dùng solveJob thay vì ducos1, chỉ 3 tham số
+    if (hasFastHash && fastHashModule && fastHashModule.solveJob) {
         try {
-            const result = fastHashModule.ducos1(last_h, exp_h, diff, intensity, startTime);
-            return {
-                nonce: result.nonce,
-                hashrate: result.hashrate,
-                elapsed: result.elapsed,
-                hashes: result.nonce || maxNonce
-            };
+            const result = fastHashModule.solveJob(last_h, exp_h, diff);
+            if (result && result.nonce !== undefined && result.nonce !== 0) {
+                const elapsed = (Date.now() - startTime) / 1000;
+                return {
+                    nonce: result.nonce,
+                    hashrate: result.hashrate,
+                    elapsed: elapsed,
+                    hashes: result.nonce || maxNonce
+                };
+            }
         } catch (err) {
             console.log(`⚠️ FastHash error: ${err.message}, falling back to JS`);
             // Fallback to JS if Rust fails
