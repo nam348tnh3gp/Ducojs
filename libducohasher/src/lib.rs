@@ -1,87 +1,65 @@
 use neon::prelude::*;
 use sha1_smol::Sha1;
-use std::time::Duration;
-use std::sync::Mutex;
+use hex;
 
-// ================= DUCO HASHER CLASS =================
-struct DUCOHasher {
-    hasher: Sha1,
-}
-
-impl DUCOHasher {
-    fn new(data: &[u8]) -> Self {
-        Self {
-            hasher: Sha1::from(data),
-        }
-    }
+// ================= DUCO HASHER =================
+fn ducos1_hash(base: &str, target_hex: &str, diff: u32) -> Option<(u64, f64, u128)> {
+    let target = hex::decode(target_hex).unwrap_or_default();
+    let max_nonce = (diff * 100) as u64;
+    let start = std::time::Instant::now();
     
-    fn ducos1(&mut self, expected_hash: &[u8], diff: u128, eff: u64) -> u128 {
-        let mut buffer = itoa::Buffer::new();
-        let max_nonce = 100 * diff;
+    for nonce in 0..=max_nonce {
+        let input = format!("{}{}", base, nonce);
+        let hash = Sha1::from(input).hex();
         
-        for nonce in 0..=max_nonce {
-            let mut temp_hasher = self.hasher.clone();
-            let str = buffer.format(nonce);
-            temp_hasher.update(str.as_bytes());
-            
-            if temp_hasher.digest().bytes() == expected_hash {
-                self.hasher.reset();
-                return nonce;
-            }
-            
-            // Intensity control: sleep every 5000 nonces
-            if eff != 0 && nonce % 5000 == 0 {
-                let sleep_ms = (eff as u64) / 100;
-                if sleep_ms > 0 {
-                    std::thread::sleep(Duration::from_millis(sleep_ms));
-                }
-            }
+        if hash == target_hex {
+            let elapsed = start.elapsed();
+            let elapsed_us = elapsed.as_micros();
+            let hashrate = if elapsed_us > 0 {
+                (nonce as f64 * 1_000_000.0) / elapsed_us as f64
+            } else {
+                0.0
+            };
+            return Some((nonce, hashrate, elapsed_us));
         }
-        0
     }
+    None
 }
 
 // ================= NEON BINDINGS =================
-fn create_hasher(mut cx: FunctionContext) -> JsResult<JsObject> {
-    let data = cx.argument::<JsString>(0)?.value(&mut cx);
-    let data_bytes = data.as_bytes();
+fn solve_job(mut cx: FunctionContext) -> JsResult<JsObject> {
+    let base = cx.argument::<JsString>(0)?.value(&mut cx);
+    let target_hex = cx.argument::<JsString>(1)?.value(&mut cx);
+    let diff = cx.argument::<JsNumber>(2)?.value(&mut cx) as u32;
     
-    let hasher = DUCOHasher::new(data_bytes);
-    let boxed = cx.boxed(hasher);
+    let result = ducos1_hash(&base, &target_hex, diff);
     
-    // Create wrapper object with methods
     let obj = cx.empty_object();
-    obj.set(&mut cx, "_inner", boxed)?;
+    
+    if let Some((nonce, hashrate, elapsed_us)) = result {
+        let nonce_val = cx.number(nonce as f64);
+        let hashrate_val = cx.number(hashrate);
+        let elapsed_val = cx.number(elapsed_us as f64 / 1000.0);
+        
+        obj.set(&mut cx, "nonce", nonce_val)?;
+        obj.set(&mut cx, "hashrate", hashrate_val)?;
+        obj.set(&mut cx, "elapsedMs", elapsed_val)?;
+    } else {
+        // Return empty object with nonce = 0
+        let nonce_val = cx.number(0.0);
+        let hashrate_val = cx.number(0.0);
+        let elapsed_val = cx.number(0.0);
+        
+        obj.set(&mut cx, "nonce", nonce_val)?;
+        obj.set(&mut cx, "hashrate", hashrate_val)?;
+        obj.set(&mut cx, "elapsedMs", elapsed_val)?;
+    }
     
     Ok(obj)
 }
 
-fn ducos1(mut cx: FunctionContext) -> JsResult<JsNumber> {
-    // Get the hasher object
-    let this = cx.this();
-    let inner = this.get(&mut cx, "_inner")?;
-    let mut hasher = cx.borrow_mut(&inner)?;
-    
-    // Get arguments
-    let expected_hash_hex = cx.argument::<JsString>(0)?.value(&mut cx);
-    let diff = cx.argument::<JsNumber>(1)?.value(&mut cx) as u128;
-    let eff = cx.argument::<JsNumber>(2)?.value(&mut cx) as u64;
-    
-    // Convert hex string to bytes
-    let expected_hash_bytes = hex::decode(expected_hash_hex).unwrap();
-    
-    let nonce = hasher.ducos1(&expected_hash_bytes, diff, eff);
-    
-    Ok(cx.number(nonce as f64))
-}
-
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
-    // Export a factory function that creates a hasher
-    cx.export_function("createHasher", create_hasher)?;
-    
-    // Export the DUCOS1 function that takes a hasher object
-    cx.export_function("ducos1", ducos1)?;
-    
+    cx.export_function("solveJob", solve_job)?;
     Ok(())
 }
