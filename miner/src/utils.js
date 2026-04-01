@@ -16,18 +16,14 @@ try {
     // Đường dẫn đến thư mục libducohasher
     const addonPath = path.join(__dirname, '../../libducohasher');
     
-    // Kiểm tra các vị trí có thể có file .so hoặc .node
+    // Kiểm tra các vị trí có thể có file .so
     const possiblePaths = [
-        // Ưu tiên file .so (Linux)
+        // Linux .so files
         path.join(addonPath, 'target/release/libducohasher.so'),
         path.join(addonPath, 'target/release/liblibducohasher.so'),
-        // Các file khác
-        path.join(addonPath, 'target/release/libducohasher.dylib'),
-        path.join(addonPath, 'target/release/liblibducohasher.dylib'),
-        path.join(addonPath, 'target/release/libducohasher.node'),
-        path.join(addonPath, 'index.node'),
         path.join(addonPath, 'libducohasher.so'),
-        // Thử đường dẫn tuyệt đối nếu cần
+        path.join(addonPath, 'liblibducohasher.so'),
+        // Thử đường dẫn tuyệt đối
         '/root/Ducojs/libducohasher/target/release/libducohasher.so',
         '/root/Ducojs/libducohasher/target/release/liblibducohasher.so',
     ];
@@ -46,22 +42,47 @@ try {
     
     if (foundPath) {
         console.log(`📂 Loading native addon from: ${foundPath}`);
-        fastHashModule = require(foundPath);
-        hasFastHash = true;
-        console.log('✅ [FASTHASH] Rust native addon loaded successfully');
+        
+        // Tạo module object để dlopen vào
+        const module = { exports: {} };
+        
+        // Dùng process.dlopen để load shared library
+        if (process.dlopen) {
+            process.dlopen(module, foundPath);
+            fastHashModule = module.exports;
+            hasFastHash = true;
+            console.log('✅ [FASTHASH] Rust native addon loaded successfully via dlopen');
+        } else {
+            // Fallback cho Node.js cũ hơn
+            const dlopen = require('module')._load;
+            if (typeof dlopen === 'function') {
+                fastHashModule = dlopen(foundPath);
+                hasFastHash = true;
+                console.log('✅ [FASTHASH] Rust native addon loaded successfully via module._load');
+            } else {
+                throw new Error('No suitable method to load native addon');
+            }
+        }
         
         // Kiểm tra các hàm có sẵn
-        const exports = Object.keys(fastHashModule);
-        console.log('📦 Available exports:', exports);
-        
-        if (fastHashModule.solveJob) {
-            console.log('✅ [FASTHASH] solveJob function available');
-        } else if (fastHashModule.solveJobFull) {
-            console.log('✅ [FASTHASH] solveJobFull function available');
-        } else if (fastHashModule.ducos1_hash) {
-            console.log('✅ [FASTHASH] ducos1_hash function available');
+        if (fastHashModule) {
+            const exports = Object.keys(fastHashModule);
+            console.log('📦 Available exports:', exports);
+            
+            if (fastHashModule.solveJob) {
+                console.log('✅ [FASTHASH] solveJob function available');
+            } else if (fastHashModule.solveJobFull) {
+                console.log('✅ [FASTHASH] solveJobFull function available');
+            } else if (fastHashModule.ducos1_hash) {
+                console.log('✅ [FASTHASH] ducos1_hash function available');
+            } else {
+                console.log('⚠️ [FASTHASH] No mining function found in exports');
+                if (typeof fastHashModule === 'function') {
+                    console.log('📌 Module itself is a function, will try to call it directly');
+                }
+            }
         } else {
-            console.log('⚠️ [FASTHASH] No mining function found in exports');
+            console.log('⚠️ [FASTHASH] Module exports is empty');
         }
     } else {
         console.log('⚠️ [FASTHASH] libducohasher not found');
@@ -181,7 +202,7 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
             
             // Thử các tên hàm khác nhau
             if (fastHashModule.solveJob && typeof fastHashModule.solveJob === 'function') {
-                console.log('📞 Calling solveJob with:', { last_h, exp_h, diff });
+                console.log('📞 Calling solveJob');
                 result = fastHashModule.solveJob(last_h, exp_h, diff);
                 console.log('🔧 solveJob returned:', result);
             } 
@@ -195,44 +216,42 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
                 result = fastHashModule.ducos1_hash(last_h, exp_h, diff);
                 console.log('🔧 ducos1_hash returned:', result);
             }
-            else {
-                // Nếu không tìm thấy hàm, thử gọi module trực tiếp
-                console.log('📞 Trying to call module directly');
+            else if (typeof fastHashModule === 'function') {
+                console.log('📞 Calling module directly');
                 result = fastHashModule(last_h, exp_h, diff);
                 console.log('🔧 Direct call returned:', result);
             }
+            else {
+                // Thử gọi với tên export mặc định
+                const defaultExport = fastHashModule.default || fastHashModule;
+                if (typeof defaultExport === 'function') {
+                    console.log('📞 Calling default export');
+                    result = defaultExport(last_h, exp_h, diff);
+                    console.log('🔧 Default export returned:', result);
+                }
+            }
             
             if (result !== null && result !== undefined) {
-                // Nếu result là object có nonce
-                if (typeof result === 'object' && result.nonce !== undefined && result.nonce !== 0) {
+                // Xử lý kết quả trả về
+                let nonceFound = 0;
+                
+                if (typeof result === 'object' && result.nonce !== undefined) {
+                    nonceFound = result.nonce;
+                } else if (typeof result === 'number') {
+                    nonceFound = result;
+                } else if (typeof result === 'bigint') {
+                    nonceFound = Number(result);
+                }
+                
+                if (nonceFound > 0) {
                     const elapsed = (Date.now() - startTime) / 1000;
-                    const hashrate = result.hashrate || (result.nonce / elapsed);
+                    const hashrate = nonceFound / elapsed;
+                    console.log(`✅ Found nonce: ${nonceFound} in ${elapsed.toFixed(2)}s (${calculateHashrate(hashrate)})`);
                     return {
-                        nonce: result.nonce,
+                        nonce: nonceFound,
                         hashrate: hashrate,
                         elapsed: elapsed,
-                        hashes: result.nonce
-                    };
-                } 
-                // Nếu result là number trực tiếp
-                else if (typeof result === 'number' && result > 0) {
-                    const elapsed = (Date.now() - startTime) / 1000;
-                    return {
-                        nonce: result,
-                        hashrate: result / elapsed,
-                        elapsed: elapsed,
-                        hashes: result
-                    };
-                }
-                // Nếu result là bigint
-                else if (typeof result === 'bigint' && result > 0) {
-                    const nonceNum = Number(result);
-                    const elapsed = (Date.now() - startTime) / 1000;
-                    return {
-                        nonce: nonceNum,
-                        hashrate: nonceNum / elapsed,
-                        elapsed: elapsed,
-                        hashes: nonceNum
+                        hashes: nonceFound
                     };
                 }
             }
@@ -240,7 +259,7 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
             console.log('⚠️ Rust addon returned invalid result, falling back to JS');
         } catch (err) {
             console.log(`⚠️ FastHash error: ${err.message}`);
-            console.log('Error stack:', err.stack);
+            if (err.stack) console.log('Error stack:', err.stack);
             console.log('Falling back to JavaScript implementation');
         }
     }
@@ -254,6 +273,7 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
         if (hash === exp_h) {
             const elapsed = (Date.now() - startTime) / 1000;
             const hashrate = elapsed > 0 ? hashes / elapsed : 0;
+            console.log(`✅ Found nonce: ${nonce} in ${elapsed.toFixed(2)}s (${calculateHashrate(hashrate)})`);
             return { nonce, hashrate, elapsed, hashes };
         }
         
@@ -272,6 +292,7 @@ const mineJob = async (last_h, exp_h, diff, intensity, hashlib, onProgress) => {
     }
     
     const elapsed = (Date.now() - startTime) / 1000;
+    console.log(`❌ No nonce found after ${maxNonce} attempts`);
     return { nonce: 0, hashrate: 0, elapsed, hashes };
 };
 
