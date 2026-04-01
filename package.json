@@ -7,11 +7,11 @@
     "start": "node app.js",
     "build-fast": "cd libducohasher && npm install && cargo build --release",
     "build-rust": "cd libducohasher && cargo build --release",
-    "test": "node testLib.js",
-    "install": "npm run build-fast || echo 'Rust build failed, using pure JS mode'"
+    "test": "node testLib.js"
   },
   "dependencies": {
     "benchmark": "^2.1.4",
+    "express": "^4.18.2",
     "ini": "^3.0.0",
     "js-sha1": "^0.6.0",
     "jshashes": "^1.0.8",
@@ -19,10 +19,8 @@
     "promise-socket": "^6.0.3",
     "rusha": "^0.8.14",
     "sha1": "^1.1.1",
-    "express": "^4.18.2",
     "socket.io": "^4.7.2",
-    "strip-ansi": "^7.1.0",
-    "neon-cli": "^0.10.0"
+    "strip-ansi": "^6.0.1"
   },
   "optionalDependencies": {
     "neon-cli": "^0.10.0"
