@@ -59,46 +59,55 @@ const loadConfig = async () => {
 };
 
 const printData = (threads) => {
-    RL.cursorTo(process.stdout, 0, 0);
-    RL.clearLine(process.stdout, 0);
-    RL.clearScreenDown(process.stdout);
-
+    // Clear console for better display
+    console.clear();
+    
     let rows = [];
-    for (const i in threads) {
-        rows.push({
-            Hashrate: utils.calculateHashrate(threads[i].hashes),
-            Accepted: threads[i].accepted,
-            Rejected: threads[i].rejected
-        });
-    }
-
     let hr = 0, acc = 0, rej = 0;
-    for (const i in threads) {
-        hr = hr + threads[i].hashes;
-        acc = acc + threads[i].accepted;
-        rej = rej + threads[i].rejected;
+    
+    for (let i = 0; i < threads.length; i++) {
+        if (threads[i]) {
+            hr += threads[i].hashes || 0;
+            acc += threads[i].accepted || 0;
+            rej += threads[i].rejected || 0;
+            
+            rows.push({
+                Worker: i,
+                Hashrate: utils.calculateHashrate(threads[i].hashes || 0),
+                Accepted: threads[i].accepted || 0,
+                Rejected: threads[i].rejected || 0
+            });
+        }
     }
-
-    rows["Total"] = {
+    
+    rows.push({
+        Worker: "TOTAL",
         Hashrate: utils.calculateHashrate(hr),
         Accepted: acc,
         Rejected: rej
-    };
-
+    });
+    
     console.table(rows);
-    rows = [];
+    
+    // Hiển thị thêm thông tin
+    console.log(`\n📊 Total Stats:`);
+    console.log(`   🔥 Total Hashrate: ${utils.calculateHashrate(hr)}`);
+    console.log(`   ✅ Total Accepted: ${acc}`);
+    console.log(`   ❌ Total Rejected: ${rej}`);
+    console.log(`   📈 Success Rate: ${acc + rej > 0 ? ((acc / (acc + rej)) * 100).toFixed(2) : 0}%`);
 };
 
-// ================= MINING LOOP (sử dụng unified mineJob) =================
+// ================= MINING LOOP =================
 const startMining = async (socket, data, reconnectCallback) => {
     let promiseSocket = new PromiseSocket(socket);
     promiseSocket.setTimeout(15000);
     let isRunning = true;
     let intensity = 95;
+    let consecutiveErrors = 0;
 
     while (isRunning) {
         try {
-            // ✅ THÊM \n vào cuối message
+            // Gửi yêu cầu job
             socket.write("JOB," + user + "," + difficulty + "," + mining_key + "\n");
             
             const jobData = await Promise.race([
@@ -111,7 +120,6 @@ const startMining = async (socket, data, reconnectCallback) => {
                 break;
             }
             
-            // ✅ THÊM .toString() để xử lý Buffer
             let job = jobData.toString().split(",");
             if (job.length < 3) {
                 console.log(`[${data.workerId}] Invalid job received: ${job}`);
@@ -130,7 +138,6 @@ const startMining = async (socket, data, reconnectCallback) => {
             if (result.nonce > 0) {
                 const elapsed = (Date.now() - startTime) / 1000;
                 const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
-                // ✅ THÊM \n vào cuối message
                 socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}\n`);
             } else {
                 console.log(`[${data.workerId}] No nonce found for this job`);
@@ -147,32 +154,57 @@ const startMining = async (socket, data, reconnectCallback) => {
                 break;
             }
 
-            // ✅ THÊM .toString() để xử lý Buffer
             const responseStr = response.toString();
             if (responseStr.includes("GOOD")) {
                 data.accepted++;
+                consecutiveErrors = 0;
                 console.log(`[${data.workerId}] ✅ Share accepted! Total: ${data.accepted}`);
             } else if (responseStr.includes("BLOCK")) {
                 console.log(`[${data.workerId}] ⛓️ New block found!`);
                 data.accepted++;
+                consecutiveErrors = 0;
             } else if (responseStr.includes("BAD")) {
                 data.rejected++;
+                consecutiveErrors++;
                 console.log(`[${data.workerId}] ❌ Share rejected: ${responseStr}`);
             } else {
                 console.log(`[${data.workerId}] ℹ️ Pool response: ${responseStr}`);
             }
 
-            process.send(data);
+            // Gửi dữ liệu về master process
+            if (process.send) {
+                process.send({
+                    workerId: data.workerId,
+                    hashes: data.hashes,
+                    rejected: data.rejected,
+                    accepted: data.accepted
+                });
+            }
+            
             data.hashes = 0;
+            
+            // Nếu có quá nhiều lỗi liên tiếp, giảm intensity
+            if (consecutiveErrors > 5) {
+                intensity = Math.max(50, intensity - 5);
+                console.log(`[${data.workerId}] Reduced intensity to ${intensity}% due to errors`);
+                consecutiveErrors = 0;
+            }
             
         } catch (err) {
             console.log(`[${data.workerId}] ⚠️ Mining error: ${err.message}`);
-            break;
+            consecutiveErrors++;
+            
+            if (consecutiveErrors > 3) {
+                console.log(`[${data.workerId}] Too many errors, reconnecting...`);
+                break;
+            }
         }
     }
     
     try {
-        socket.end();
+        if (socket && !socket.destroyed) {
+            socket.end();
+        }
     } catch(e) {}
     
     if (reconnectCallback) {
@@ -183,7 +215,7 @@ const startMining = async (socket, data, reconnectCallback) => {
 // ================= WORKER CONNECTION HANDLER =================
 const startWorker = () => {
     let workerData = {
-        workerId: cluster.worker.id - 1,
+        workerId: cluster.worker ? cluster.worker.id - 1 : 0,
         hashes: 0,
         rejected: 0,
         accepted: 0
@@ -192,6 +224,7 @@ const startWorker = () => {
     let currentSocket = null;
     let reconnectTimer = null;
     let isConnecting = false;
+    let reconnectAttempts = 0;
     
     const connectToPool = () => {
         if (isConnecting) return;
@@ -199,6 +232,7 @@ const startWorker = () => {
         
         if (reconnectTimer) clearTimeout(reconnectTimer);
         
+        // Thông báo trạng thái FastHash
         if (utils.hasFastHash) {
             console.log(`[${workerData.workerId}] 🚀 FastHash (Rust) is ACTIVE - mining accelerated!`);
         } else {
@@ -216,6 +250,7 @@ const startWorker = () => {
             
             socket.once("connect", () => {
                 console.log(`[${workerData.workerId}] ✅ Connected to pool`);
+                reconnectAttempts = 0;
             });
             
             socket.once("data", (data) => {
@@ -232,7 +267,9 @@ const startWorker = () => {
             socket.on("end", () => {
                 console.log(`[${workerData.workerId}] 🔌 Connection ended by pool`);
                 if (!isConnecting) {
-                    reconnectTimer = setTimeout(() => connectToPool(), 5000);
+                    const delay = Math.min(30000, 5000 * Math.pow(2, reconnectAttempts));
+                    reconnectTimer = setTimeout(() => connectToPool(), delay);
+                    reconnectAttempts++;
                 }
                 isConnecting = false;
             });
@@ -240,7 +277,9 @@ const startWorker = () => {
             socket.on("error", (err) => {
                 console.log(`[${workerData.workerId}] ⚠️ Socket error: ${err.message}`);
                 if (!isConnecting) {
-                    reconnectTimer = setTimeout(() => connectToPool(), 5000);
+                    const delay = Math.min(30000, 5000 * Math.pow(2, reconnectAttempts));
+                    reconnectTimer = setTimeout(() => connectToPool(), delay);
+                    reconnectAttempts++;
                 }
                 isConnecting = false;
             });
@@ -249,10 +288,12 @@ const startWorker = () => {
             
         }).catch((err) => {
             console.log(`[${workerData.workerId}] ❌ Failed to get pool: ${err}`);
+            const delay = Math.min(30000, 10000 * Math.pow(2, reconnectAttempts));
             reconnectTimer = setTimeout(() => {
                 isConnecting = false;
                 connectToPool();
-            }, 10000);
+            }, delay);
+            reconnectAttempts++;
         });
     };
     
@@ -307,13 +348,13 @@ if (cluster.isMaster) {
                 rejected: 0,
                 accepted: 0
             };
-            threads.push(data);
+            threads[i] = data;
 
             worker.on("message", (msg) => {
                 if (threads[msg.workerId]) {
-                    threads[msg.workerId].hashes = msg.hashes;
-                    threads[msg.workerId].rejected = msg.rejected;
-                    threads[msg.workerId].accepted = msg.accepted;
+                    threads[msg.workerId].hashes = msg.hashes || 0;
+                    threads[msg.workerId].rejected = msg.rejected || 0;
+                    threads[msg.workerId].accepted = msg.accepted || 0;
                 }
                 printData(threads);
             });
@@ -333,15 +374,23 @@ if (cluster.isMaster) {
                     
                     newWorker.on("message", (msg) => {
                         if (threads[msg.workerId]) {
-                            threads[msg.workerId].hashes = msg.hashes;
-                            threads[msg.workerId].rejected = msg.rejected;
-                            threads[msg.workerId].accepted = msg.accepted;
+                            threads[msg.workerId].hashes = msg.hashes || 0;
+                            threads[msg.workerId].rejected = msg.rejected || 0;
+                            threads[msg.workerId].accepted = msg.accepted || 0;
                         }
                         printData(threads);
                     });
                 }, 3000);
             });
         }
+        
+        // In stats mỗi 30 giây
+        setInterval(() => {
+            if (threads.length > 0) {
+                printData(threads);
+            }
+        }, 30000);
+        
     }).catch((err) => {
         console.error(`❌ Failed to start master: ${err.message}`);
         process.exit(1);
