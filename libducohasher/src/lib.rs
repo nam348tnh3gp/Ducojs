@@ -1,16 +1,24 @@
 use neon::prelude::*;
 use sha1_smol::Sha1;
-use hex;
+
+// Helper function để convert sha1 sang hex
+fn sha1_to_hex(input: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(input.as_bytes());
+    let result = hasher.digest();
+    
+    // Convert bytes to hex string
+    result.iter().map(|b| format!("{:02x}", b)).collect()
+}
 
 // ================= DUCO HASHER =================
 fn ducos1_hash(base: &str, target_hex: &str, diff: u32) -> Option<(u64, f64, u128)> {
-    let target = hex::decode(target_hex).unwrap_or_default();
     let max_nonce = (diff * 100) as u64;
     let start = std::time::Instant::now();
     
     for nonce in 0..=max_nonce {
         let input = format!("{}{}", base, nonce);
-        let hash = Sha1::from(input).hex();
+        let hash = sha1_to_hex(&input);
         
         if hash == target_hex {
             let elapsed = start.elapsed();
@@ -58,6 +66,7 @@ fn solve_job(mut cx: FunctionContext) -> JsResult<JsObject> {
     Ok(obj)
 }
 
+// ================= MODULE REGISTRATION =================
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("solveJob", solve_job)?;
