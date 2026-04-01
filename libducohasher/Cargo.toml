@@ -9,6 +9,8 @@ crate-type = ["cdylib"]
 [dependencies]
 neon = "0.10.1"
 sha1_smol = "1.0"
+hex = "0.4"
+itoa = "1.0"
 
 [profile.release]
 opt-level = 3
