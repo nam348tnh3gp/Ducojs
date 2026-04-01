@@ -1,0 +1,16 @@
+{
+  "name": "libducohasher",
+  "version": "0.1.0",
+  "description": "Rust FastHash implementation for Duino-Coin",
+  "main": "index.node",
+  "scripts": {
+    "install": "cargo build --release",
+    "build": "cargo build --release"
+  },
+  "files": [
+    "index.node",
+    "target/release/libducohasher.node"
+  ],
+  "author": "Nam348tnh",
+  "license": "Apache-2.0"
+}
