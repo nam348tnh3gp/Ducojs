@@ -15,6 +15,7 @@ let user = "",
     hashlib = "",
     mining_key = "",
     difficulty = "LOW",
+    rig_identifier = "NodeRig",  // Thêm tên rig mặc định
     config = {};
 
 const loadConfig = async () => {
@@ -42,7 +43,8 @@ const loadConfig = async () => {
                 "mining_key": "101120",
                 "hashlib": "js-sha1",
                 "threads": 2,
-                "difficulty": "LOW"
+                "difficulty": "LOW",
+                "rig_identifier": "NodeRig"  // Thêm rig_identifier vào config mặc định
             };
             config = configData;
             fs.writeFile(CONFIG_FILE, ini.stringify(configData), (err) => {
@@ -61,16 +63,16 @@ const loadConfig = async () => {
 const printData = (threads) => {
     // Clear console for better display
     console.clear();
-    
+
     let rows = [];
     let hr = 0, acc = 0, rej = 0;
-    
+
     for (let i = 0; i < threads.length; i++) {
         if (threads[i]) {
             hr += threads[i].hashes || 0;
             acc += threads[i].accepted || 0;
             rej += threads[i].rejected || 0;
-            
+
             rows.push({
                 Worker: i,
                 Hashrate: utils.calculateHashrate(threads[i].hashes || 0),
@@ -79,16 +81,16 @@ const printData = (threads) => {
             });
         }
     }
-    
+
     rows.push({
         Worker: "TOTAL",
         Hashrate: utils.calculateHashrate(hr),
         Accepted: acc,
         Rejected: rej
     });
-    
+
     console.table(rows);
-    
+
     // Hiển thị thêm thông tin
     console.log(`\n📊 Total Stats:`);
     console.log(`   🔥 Total Hashrate: ${utils.calculateHashrate(hr)}`);
@@ -107,19 +109,20 @@ const startMining = async (socket, data, reconnectCallback) => {
 
     while (isRunning) {
         try {
-            // Gửi yêu cầu job
-            socket.write("JOB," + user + "," + difficulty + "," + mining_key + "\n");
-            
+            // Gửi yêu cầu job - format: JOB,username,difficulty,mining_key,
+            // (dấu phẩy cuối cùng cho trường raspi_iot_reading trống)
+            socket.write("JOB," + user + "," + difficulty + "," + mining_key + ",\n");
+
             const jobData = await Promise.race([
                 promiseSocket.read(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Job timeout")), 10000))
             ]);
-            
+
             if (!jobData) {
                 console.log(`[${data.workerId}] No job received, reconnecting...`);
                 break;
             }
-            
+
             let job = jobData.toString().split(",");
             if (job.length < 3) {
                 console.log(`[${data.workerId}] Invalid job received: ${job}`);
@@ -132,13 +135,17 @@ const startMining = async (socket, data, reconnectCallback) => {
             const startTime = Date.now();
 
             const result = await utils.mineJob(prev, toFind, diff, intensity, hashlib, null);
-            
+
             data.hashes += result.hashes;
-            
+
             if (result.nonce > 0) {
                 const elapsed = (Date.now() - startTime) / 1000;
                 const hashrate = elapsed > 0 ? data.hashes / elapsed : 0;
-                socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${user},${data.workerId}\n`);
+                
+                // ========== SỬA LỖI: Đúng format result ==========
+                // Format: nonce,hashrate,miner_name,rig_identifier,,thread_id
+                // (2 dấu phẩy liên tiếp trước thread_id)
+                socket.write(`${result.nonce},${hashrate.toFixed(2)},NodeJS-Miner,${rig_identifier},,${data.workerId}\n`);
             } else {
                 console.log(`[${data.workerId}] No nonce found for this job`);
                 continue;
@@ -148,7 +155,7 @@ const startMining = async (socket, data, reconnectCallback) => {
                 promiseSocket.read(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Response timeout")), 5000))
             ]);
-            
+
             if (!response) {
                 console.log(`[${data.workerId}] No response from pool`);
                 break;
@@ -180,33 +187,33 @@ const startMining = async (socket, data, reconnectCallback) => {
                     accepted: data.accepted
                 });
             }
-            
+
             data.hashes = 0;
-            
+
             // Nếu có quá nhiều lỗi liên tiếp, giảm intensity
             if (consecutiveErrors > 5) {
                 intensity = Math.max(50, intensity - 5);
                 console.log(`[${data.workerId}] Reduced intensity to ${intensity}% due to errors`);
                 consecutiveErrors = 0;
             }
-            
+
         } catch (err) {
             console.log(`[${data.workerId}] ⚠️ Mining error: ${err.message}`);
             consecutiveErrors++;
-            
+
             if (consecutiveErrors > 3) {
                 console.log(`[${data.workerId}] Too many errors, reconnecting...`);
                 break;
             }
         }
     }
-    
+
     try {
         if (socket && !socket.destroyed) {
             socket.end();
         }
     } catch(e) {}
-    
+
     if (reconnectCallback) {
         setTimeout(() => reconnectCallback(), 3000);
     }
@@ -220,18 +227,18 @@ const startWorker = () => {
         rejected: 0,
         accepted: 0
     };
-    
+
     let currentSocket = null;
     let reconnectTimer = null;
     let isConnecting = false;
     let reconnectAttempts = 0;
-    
+
     const connectToPool = () => {
         if (isConnecting) return;
         isConnecting = true;
-        
+
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        
+
         // Thông báo trạng thái FastHash
         if (utils.hasFastHash) {
             console.log(`[${workerData.workerId}] 🚀 FastHash (Rust) is ACTIVE - mining accelerated!`);
@@ -239,20 +246,20 @@ const startWorker = () => {
             console.log(`[${workerData.workerId}] 📦 FastHash NOT available - using pure JS (slower)`);
             console.log(`[${workerData.workerId}] 💡 To enable FastHash, run: npm run build-fast`);
         }
-        
+
         utils.getPool().then((poolData) => {
             console.log(`[${workerData.workerId}] 🌐 Connecting to pool: ${poolData.name} (${poolData.ip}:${poolData.port})`);
-            
+
             const socket = new net.Socket();
             currentSocket = socket;
             socket.setEncoding("utf8");
             socket.setTimeout(30000);
-            
+
             socket.once("connect", () => {
                 console.log(`[${workerData.workerId}] ✅ Connected to pool`);
                 reconnectAttempts = 0;
             });
-            
+
             socket.once("data", (data) => {
                 console.log(`[${workerData.workerId}] 📡 Pool MOTD: ${data.trim()}`);
                 startMining(socket, workerData, () => {
@@ -263,7 +270,7 @@ const startWorker = () => {
                 });
                 isConnecting = false;
             });
-            
+
             socket.on("end", () => {
                 console.log(`[${workerData.workerId}] 🔌 Connection ended by pool`);
                 if (!isConnecting) {
@@ -273,7 +280,7 @@ const startWorker = () => {
                 }
                 isConnecting = false;
             });
-            
+
             socket.on("error", (err) => {
                 console.log(`[${workerData.workerId}] ⚠️ Socket error: ${err.message}`);
                 if (!isConnecting) {
@@ -283,9 +290,9 @@ const startWorker = () => {
                 }
                 isConnecting = false;
             });
-            
+
             socket.connect(poolData.port, poolData.ip);
-            
+
         }).catch((err) => {
             console.log(`[${workerData.workerId}] ❌ Failed to get pool: ${err}`);
             const delay = Math.min(30000, 10000 * Math.pow(2, reconnectAttempts));
@@ -296,15 +303,16 @@ const startWorker = () => {
             reconnectAttempts++;
         });
     };
-    
+
     loadConfig().then((cfg) => {
         user = cfg.username;
         processes = parseInt(cfg.threads) || 1;
         hashlib = cfg.hashlib || "js-sha1";
         mining_key = cfg.mining_key || "";
         difficulty = cfg.difficulty || "LOW";
-        
-        console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}, hashlib=${hashlib}`);
+        rig_identifier = cfg.rig_identifier || "NodeRig";  // Đọc rig_identifier từ config
+
+        console.log(`[${workerData.workerId}] Config loaded: ${user}, diff=${difficulty}, hashlib=${hashlib}, rig=${rig_identifier}`);
         connectToPool();
     }).catch((err) => {
         console.log(`[${workerData.workerId}] ❌ Failed to load config: ${err.message}`);
@@ -322,6 +330,7 @@ if (cluster.isMaster) {
         hashlib = cfg.hashlib || "js-sha1";
         mining_key = cfg.mining_key || "";
         difficulty = cfg.difficulty || "LOW";
+        rig_identifier = cfg.rig_identifier || "NodeRig";
 
         if (!mining_key || mining_key === "") {
             console.error("❌ Mining key is required! Check config.ini");
@@ -335,6 +344,7 @@ if (cluster.isMaster) {
         console.log(`   🧵 Threads: ${processes}`);
         console.log(`   📊 Difficulty: ${difficulty}`);
         console.log(`   📦 Hashlib: ${hashlib}`);
+        console.log(`   🏷️  Rig Identifier: ${rig_identifier}`);
         console.log(`   🚀 FastHash: ${utils.hasFastHash ? '✅ ACTIVE (accelerated)' : '❌ NOT ACTIVE (using JS)'}`);
         console.log("===========================================\n");
 
@@ -358,7 +368,7 @@ if (cluster.isMaster) {
                 }
                 printData(threads);
             });
-            
+
             worker.on("exit", (code) => {
                 console.log(`⚠️ Worker ${i} exited with code ${code}, restarting...`);
                 setTimeout(() => {
@@ -371,7 +381,7 @@ if (cluster.isMaster) {
                         accepted: 0
                     };
                     threads[i] = newData;
-                    
+
                     newWorker.on("message", (msg) => {
                         if (threads[msg.workerId]) {
                             threads[msg.workerId].hashes = msg.hashes || 0;
@@ -383,14 +393,14 @@ if (cluster.isMaster) {
                 }, 3000);
             });
         }
-        
+
         // In stats mỗi 30 giây
         setInterval(() => {
             if (threads.length > 0) {
                 printData(threads);
             }
         }, 30000);
-        
+
     }).catch((err) => {
         console.error(`❌ Failed to start master: ${err.message}`);
         process.exit(1);
